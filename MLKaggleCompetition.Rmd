@@ -1,0 +1,223 @@
+---
+title: "Machine Learning Kaggle Competition "
+author: "Ingrid Wijaya"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data set 
+```{r}
+# reading the file and removing Id column in train and test data set 
+readtrain <- read.csv("training.csv")
+train <- readtrain[,-1]
+
+readtest <- read.csv("test.csv")
+test <- readtest[,-1]
+Id <- readtest[,1]
+
+# Splitting the train data set into another training and testing data set to find validation rmse
+set.seed(10)
+select <- sample(1:nrow(train), 0.7*nrow(train))
+data.train <- train[select,]
+data.test <- train[-select,]
+```
+
+## (1) linear regression
+```{r}
+library(ModelMetrics)
+# validation rmse 
+lm <- lm(Y~., data.train)
+lm.validation.error <- rmse(data.test$Y, predict(lm, data.test))
+lm.validation.error ##1.459112
+```
+
+```{r}
+# test rmse in kaggle - 1.31123
+final.linear <- lm(Y~., train)
+pred <- predict(final.linear, test) 
+lm.test.rmse <- 1.31123
+```
+
+## (2) Bagging
+```{r}
+library(randomForest)
+set.seed(10)
+
+# validation rmse 
+bag.mod <- randomForest(Y~., data=data.train, mtry=15, importance=TRUE) 
+bag.pred <- predict(bag.mod, data.test)
+bag.validation.error <- rmse(data.test$Y, bag.pred)
+bag.validation.error ##1.4107
+
+importance(bag.mod)
+```
+
+```{r}
+# test rmse in kaggle - 1.26061
+library(randomForest)
+
+final.bag <- randomForest(Y~., data=train, mtry=15, importance=TRUE) 
+pred <- predict(final.bag, test)
+bag.test.rmse <- 1.26061
+
+importance(final.bag)
+```
+
+## (3) Random Forest
+```{r}
+# validation rmse for m = 3
+set.seed(10)
+rf1 = randomForest(Y~., data.train, mtry=3, importance=T, ntree=500)
+rf1.validation.error <- rmse(data.test$Y, predict(rf1, data.test))
+rf1.validation.error ## 1.398608
+
+# validation rmse for m = 4
+set.seed(10)
+rf2 = randomForest(Y~., data.train, mtry=4, importance=T, ntree=500)
+rf2.validation.error <- rmse(data.test$Y, predict(rf2, data.test))
+rf2.validation.error ## 1.395356
+
+# validation rmse for m = 15/3 (recommended)
+set.seed(10)
+rf3 = randomForest(Y~., data.train, mtry=15/3, importance=T, ntree=500)
+rf3.validation.error <- rmse(data.test$Y, predict(rf3, data.test))
+rf3.validation.error ## 1.399285 
+
+# final rf model as it has the lowest rmse among model above
+set.seed(10)
+rf = randomForest(Y~., data.train, mtry=4, importance=T, ntree=500)
+rf.validation.error <- rmse(data.test$Y, predict(rf, data.test))
+rf.validation.error ## 1.395569
+```
+
+```{r}
+# test rmse in kaggle - 1.25125
+final.rf <- randomForest(Y~., train, mtry=4, importance=T, ntree=500)
+pred <- predict(final.rf, test, mtry=4, n.trees = 500)
+rf.test.rmse <- 1.25125
+```
+
+
+## (4) Boosting
+```{r, message=FALSE}
+# for loop to find the best 
+library(gbm)
+lambda <- seq(0.0001,0.5,0.01)
+numtree <- c(500, 1000, 1500, 2000, 2500, 3000)
+depth <- c(1,2,3,4)
+y.train <- train$Y
+validation.error <- matrix(0, nrow = length(numtree), ncol = length(lambda))
+rownames(validation.error) <- c("500","1000", "1500", "2000", "2500", "3000")
+validation.error.depth <- list()
+
+for(inter.depth in depth){
+  for (ntree in numtree){
+    for (i in lambda){
+      set.seed(10)
+      boost <- gbm(Y~., data=data.train, distribution="gaussian",
+                   n.trees=ntree, interaction.depth=inter.depth, shrinkage=i)
+      
+      validation.error[as.character(ntree), which(i==lambda)] <- rmse(data.test$Y, predict(boost,
+                                                                                           data.test))
+    }
+  }
+  # Each Component 1, 2, 3, 4 in validation.error.depth represents the 
+  # validation error rate for all ntree-shrinkage pair for the respective 
+  # interaction.depth value.
+  validation.error.depth[[inter.depth]] <- validation.error
+}
+
+# the ntree-shrinkage pair that gives the with the lowest validation error rate
+lowest.validation.1 <- which(validation.error.depth[[1]] == min(validation.error.depth[[1]]), arr.ind = TRUE)
+lowest.validation.1
+
+lowest.validation.2 <- which(validation.error.depth[[2]] == min(validation.error.depth[[2]]), arr.ind = TRUE)
+lowest.validation.2
+
+lowest.validation.3 <- which(validation.error.depth[[3]] == min(validation.error.depth[[3]]), arr.ind = TRUE)
+lowest.validation.3
+
+lowest.validation.4 <- which(validation.error.depth[[4]] == min(validation.error.depth[[4]]), arr.ind = TRUE)
+lowest.validation.4
+
+# lowest validation rmse from each interaction.depth value (1, 2, 3, 4)
+val.rmse.1 <- validation.error.depth[[1]][lowest.validation.1]
+val.rmse.2 <- validation.error.depth[[2]][lowest.validation.2]
+val.rmse.3 <- validation.error.depth[[3]][lowest.validation.3]
+val.rmse.4 <- validation.error.depth[[4]][lowest.validation.4]
+
+# summary of lowest validation rmse from all three tuning parameters
+summary <- rbind(c(1, val.rmse.1,  numtree[lowest.validation.1[1]], lambda[lowest.validation.1[2]]), 
+                 c(2, val.rmse.2,  numtree[lowest.validation.2[1]], lambda[lowest.validation.2[2]]), 
+                 c(3, val.rmse.3,  numtree[lowest.validation.3[1]], lambda[lowest.validation.3[2]]), 
+                 c(4, val.rmse.4,  numtree[lowest.validation.4[1]], lambda[lowest.validation.4[2]]))
+rownames(summary) <- c("1","2", "3", "4")
+colnames(summary) <- c("interaction.depth","validation rmse", "ntree", "shrinkage")
+summary
+
+bestntree <- 500 
+bestlambda <- 0.0501
+bestinteraction.depth <- 4 
+
+# validation rmse 
+set.seed(10)
+boost.mod <- gbm(Y~., data=data.train, distribution="gaussian",
+                 n.trees=bestntree, interaction.depth=bestinteraction.depth, shrinkage=bestlambda)
+boost.validation.error <- rmse(data.test$Y, predict(boost.mod, data.test))
+boost.validation.error ## 1.308332
+
+# relative influence plot and relative influence statistics. 
+summary(boost.mod)
+
+par(mfrow=c(1,2)) 
+plot(boost.mod ,i="X13") # 1st most impt var
+plot(boost.mod ,i="X14") # 2nd most impt var
+```
+
+```{r}
+# test rmse in kaggle - 1.20241
+boost.best <- gbm(Y~., data=train, distribution = "gaussian", n.trees =
+                    bestntree, interaction.depth = bestinteraction.depth, shrinkage = bestlambda)
+
+pred <- predict(boost.best, test,n.trees = bestntree)
+boost.test.rmse <- 1.20241
+```
+
+## (5) Summary of figures in the report
+```{r}
+par(mfrow=c(1,2)) 
+# Fig.1 Comparing validation error rate for 4 different approaches above 
+ynames <- c("lm", "bagging", "random forest", "boosting")
+validation <- c(lm.validation.error, bag.validation.error, rf.validation.error, boost.validation.error)
+barplot(height = validation, names = ynames, 
+        main ="Fig.1 Comparing different approach based on validation error rate (RMSE)", 
+        xlab = "statistical model",ylab = "validation RMSE", 
+        ylim = c(0, 1.5), col = "light blue")
+
+# Fig. 2 Comparing test error rate for 4 different approaches above 
+test <- c(lm.test.rmse, bag.test.rmse, rf.test.rmse, boost.test.rmse)
+barplot(height = test, names = ynames, 
+        main ="Fig.2 Comparing different approach based on test error rate (RMSE)", 
+        xlab = "statistical model",ylab = "test RMSE", 
+        ylim = c(0, 1.5), col = "light yellow")
+
+# Fig. 3 relative influence plot 
+par(mfrow=c(1,1)) 
+set.seed(10)
+boost.mod <- gbm(Y~., data=data.train, distribution="gaussian",
+                 n.trees=bestntree, interaction.depth=bestinteraction.depth, shrinkage=bestlambda)
+boost.validation.error <- rmse(data.test$Y, predict(boost.mod, data.test))
+boost.validation.error 
+summary(boost.mod)
+
+# Fig. 4 partial dependence plot
+par(mfrow=c(1,2)) 
+plot(boost.mod ,i="X14") # 1st most impt var
+plot(boost.mod ,i="X8") # 2nd most impt var
+```
+
